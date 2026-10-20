@@ -215,8 +215,8 @@ public struct JunitXML: XmlSerializable {
                         relativePathNames: relativePathNames,
                         shell: shell
                     )
-                    let testcases = createTestCases(
-                        for: subGroup.nameString, tests: subGroup.subtests, failureSummaries: failureSummaries
+                    let testcases = createTestCasesRecursively(
+                        for: subGroup, classname: subGroup.nameString, failureSummaries: failureSummaries
                     )
                     testcases.forEach { node.addChild($0) }
                     nodes.append(node)
@@ -224,8 +224,8 @@ public struct JunitXML: XmlSerializable {
                 return nodes
             } else {
                 let combined = group.subtestGroups.reduce([XMLElement]()) { rslt, subGroup in
-                    return rslt + createTestCases(
-                        for: subGroup.nameString, tests: subGroup.subtests, failureSummaries: failureSummaries
+                    return rslt + createTestCasesRecursively(
+                        for: subGroup, classname: subGroup.nameString, failureSummaries: failureSummaries
                     )
                 }
                 let node = group.testSuiteXML(numFormatter: numFormatter)
@@ -259,6 +259,21 @@ public struct JunitXML: XmlSerializable {
             node.addChild(testcase)
         }
         return node
+    }
+
+    // Swift Testing suites can nest (`@Suite struct Outer { @Suite struct Inner {} }`):
+    // collect the tests of every nested group too, with the classname "Outer.Inner".
+    private func createTestCasesRecursively(
+        for group: JunitTestGroup, classname: String, failureSummaries: [JunitFailureSummary]
+    ) -> [XMLElement] {
+        let ownTests = createTestCases(for: classname, tests: group.subtests, failureSummaries: failureSummaries)
+        return group.subtestGroups.reduce(ownTests) { rslt, subGroup in
+            return rslt + createTestCasesRecursively(
+                for: subGroup,
+                classname: "\(classname).\(subGroup.nameString)",
+                failureSummaries: failureSummaries
+            )
+        }
     }
 
     private func createTestCases(
@@ -337,9 +352,9 @@ public struct JunitXML: XmlSerializable {
     private func addSessionLevelFailures(to testsuites: XMLElement) {
         // Get session-level failures that weren't matched to any specific test
         let unmatchedFailures = dataProvider.sessionLevelFailures
-        
+
         guard !unmatchedFailures.isEmpty else { return }
-        
+
         // For JUnit format, create a separate test suite for session-level failures
         // For Sonar format, we skip this as it expects file-based organization
         if testReportFormat != .sonar {
@@ -349,7 +364,7 @@ public struct JunitXML: XmlSerializable {
             sessionSuite.addAttribute(name: "failures", stringValue: String(unmatchedFailures.count))
             sessionSuite.addAttribute(name: "errors", stringValue: "0")
             sessionSuite.addAttribute(name: "time", stringValue: "0")
-            
+
             for failure in unmatchedFailures {
                 let testcase = XMLElement(name: nodeNames.testcaseName)
                 let testName = failure.testCaseName.isEmpty ? "Unknown test" : failure.testCaseName
@@ -363,7 +378,7 @@ public struct JunitXML: XmlSerializable {
                 testcase.addChild(failure.failureXML(projectRoot: projectRoot))
                 sessionSuite.addChild(testcase)
             }
-            
+
             testsuites.addChild(sessionSuite)
         }
     }
