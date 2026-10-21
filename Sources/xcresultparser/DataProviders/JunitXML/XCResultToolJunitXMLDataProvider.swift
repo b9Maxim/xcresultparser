@@ -16,10 +16,16 @@ struct XCResultToolJunitXMLDataProvider: JunitXMLDataProviding {
         tests = try client.getTests(path: url)
     }
 
+    // Counted from the mapped tests, as the `<testcase>` elements are: the summary counts
+    // a parameterized test once, however many arguments it ran with.
     var metrics: JunitInvocationMetrics {
-        JunitInvocationMetrics(
-            testsCount: summary.totalTestCount,
-            testsFailedCount: summary.failedTests
+        let mappedTests = mapPlanRunSummaries(from: tests, fallbackName: summary.title)
+            .flatMap(\.testableSummaries)
+            .flatMap(\.tests)
+            .flatMap(\.allTests)
+        return JunitInvocationMetrics(
+            testsCount: mappedTests.count,
+            testsFailedCount: mappedTests.filter(\.isFailed).count
         )
     }
 
@@ -33,7 +39,7 @@ struct XCResultToolJunitXMLDataProvider: JunitXMLDataProviding {
             fallbackName: summary.title
         )
 
-        let failureSummaries = summary.testFailures.map { failure in
+        let testFailureSummaries = summary.testFailures.map { failure in
             let matchingFailureMessage = bestFailureMessage(
                 for: failure,
                 in: failureMessageDetails[failure.testIdentifierString] ?? []
@@ -46,6 +52,7 @@ struct XCResultToolJunitXMLDataProvider: JunitXMLDataProviding {
                 documentLocation: matchingFailureMessage?.documentLocation
             )
         }
+        let failureSummaries = testFailureSummaries + argumentFailureSummaries()
 
         return [
             JunitTestAction(
@@ -285,7 +292,7 @@ struct XCResultToolJunitXMLDataProvider: JunitXMLDataProviding {
 
         if node.nodeType == .failureMessage,
            let currentIdentifier,
-           let detail = FailureMessageDetail(from: node.name) {
+           let detail = FailureMessageDetail(failureMessage: node) {
             result[currentIdentifier, default: []].append(detail)
         }
 
@@ -296,6 +303,50 @@ struct XCResultToolJunitXMLDataProvider: JunitXMLDataProviding {
                 currentTestClassName: currentClassName,
                 into: &result
             )
+        }
+    }
+
+    // The summary names a failing parameterized test without its arguments
+    // (`Suite/test(value:)`), but each argument is its own `<testcase>`
+    // (`test(value: 2)`): take that argument's messages from the test tree.
+    private func argumentFailureSummaries() -> [JunitFailureSummary] {
+        var result = [JunitFailureSummary]()
+        for node in tests.testNodes {
+            collectArgumentFailures(in: node, currentTestClassName: nil, into: &result)
+        }
+        return result
+    }
+
+    private func collectArgumentFailures(
+        in node: XCTestNode,
+        currentTestClassName: String?,
+        into result: inout [JunitFailureSummary]
+    ) {
+        var currentClassName = currentTestClassName
+        if node.nodeType == .testSuite {
+            currentClassName = canonicalTestContainerIdentifier(for: node) ?? node.name
+        }
+        guard node.nodeType == .testCase else {
+            for child in node.children ?? [] {
+                collectArgumentFailures(in: child, currentTestClassName: currentClassName, into: &result)
+            }
+            return
+        }
+        for argument in node.children ?? [] where argument.nodeType == .arguments && argument.result == .failed {
+            let identifier = node.mapArgumentTest(argument: argument, testClassName: currentClassName).identifier
+            // Every retry repeats the same message: keep each one once.
+            var seen = Set<String>()
+            for detail in argument.failureMessageDetails where seen.insert(detail.message).inserted {
+                result.append(
+                    JunitFailureSummary(
+                        message: detail.message,
+                        testCaseName: identifier.replacingOccurrences(of: "/", with: "."),
+                        issueType: "Uncategorized",
+                        producingTarget: nil,
+                        documentLocation: detail.documentLocation
+                    )
+                )
+            }
         }
     }
 
@@ -398,5 +449,11 @@ struct XCResultToolJunitXMLDataProvider: JunitXMLDataProviding {
         // Swift Testing creates synthetic test nodes for session-level failures
         identifier == "Issues recorded without an associated test or suite" ||
         identifier.contains("«unknown»")
+    }
+}
+
+private extension JunitTestGroup {
+    var allTests: [JunitTest] {
+        subtests + subtestGroups.flatMap(\.allTests)
     }
 }

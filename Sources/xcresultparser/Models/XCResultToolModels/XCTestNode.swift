@@ -19,6 +19,7 @@ struct XCTestNode: Codable {
     let durationInSeconds: TimeInterval? // e.g. 19
     let details: String?
     let tags: [String]
+    let sourceLocation: XCTestNodeSourceLocation? // Failure Message nodes since Xcode 26
     // let duration: String // left out because we can format `durationInSeconds` as String ourselves ;-)
 }
 
@@ -44,5 +45,11 @@ extension XCTestNode {
         durationInSeconds = try? values.decode(TimeInterval.self, forKey: .durationInSeconds)
         details = try? values.decode(String.self, forKey: .details)
         tags = (try? values.decode([String].self, forKey: .tags)) ?? []
+        sourceLocation = try? values.decode(XCTestNodeSourceLocation.self, forKey: .sourceLocation)
     }
+}
+
+struct XCTestNodeSourceLocation: Codable {
+    let filePath: String
+    let lineNumber: Int
 }

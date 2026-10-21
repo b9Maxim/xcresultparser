@@ -43,6 +43,16 @@ extension XCTestNode {
         }
     }
 
+    /// The `Failure Message` nodes anywhere below this node, in tree order.
+    var failureMessageDetails: [FailureMessageDetail] {
+        (children ?? []).flatMap { child -> [FailureMessageDetail] in
+            if child.nodeType == .failureMessage {
+                return FailureMessageDetail(failureMessage: child).map { [$0] } ?? []
+            }
+            return child.failureMessageDetails
+        }
+    }
+
     /// `true` when the test was retried and recovered: at least one repetition
     /// passed while at least one other repetition failed. Such a test is
     /// "flaky"/"mixed" rather than a clean pass or a clean failure.

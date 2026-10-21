@@ -206,8 +206,23 @@ public struct JunitXML: XmlSerializable {
                 )
             ]
         } else {
+            // Top-level Swift Testing functions (`@Test func f()` outside any suite) sit
+            // directly in the bundle, next to its suites; their classname is the bundle.
+            let bundleClassname = group.testcaseClassname
             if testReportFormat == .sonar {
                 var nodes = [XMLElement]()
+                if !group.subtests.isEmpty {
+                    let node = group.sonarFileXML(
+                        projectRoot: projectRoot,
+                        configurationName: configurationName,
+                        relativePathNames: relativePathNames,
+                        shell: shell
+                    )
+                    createTestCases(
+                        for: bundleClassname, tests: group.subtests, failureSummaries: failureSummaries
+                    ).forEach { node.addChild($0) }
+                    nodes.append(node)
+                }
                 for subGroup in group.subtestGroups {
                     let node = subGroup.sonarFileXML(
                         projectRoot: projectRoot,
@@ -223,7 +238,10 @@ public struct JunitXML: XmlSerializable {
                 }
                 return nodes
             } else {
-                let combined = group.subtestGroups.reduce([XMLElement]()) { rslt, subGroup in
+                let ownTests = createTestCases(
+                    for: bundleClassname, tests: group.subtests, failureSummaries: failureSummaries
+                )
+                let combined = group.subtestGroups.reduce(ownTests) { rslt, subGroup in
                     return rslt + createTestCasesRecursively(
                         for: subGroup, classname: subGroup.nameString, failureSummaries: failureSummaries
                     )
@@ -253,7 +271,7 @@ public struct JunitXML: XmlSerializable {
         for thisTest in tests {
             let testcase = createTestCase(
                 test: thisTest,
-                classname: group.nameString,
+                classname: group.testcaseClassname,
                 failureSummaries: failureSummaries
             )
             node.addChild(testcase)
@@ -411,12 +429,14 @@ extension JunitTest {
                 name: nodeNames.testcaseDurationName,
                 stringValue: correctedTime
             )
-        } else if let time = duration,
-                  !nodeNames.testcaseDurationName.isEmpty {
-            testcase.addAttribute(
-                name: nodeNames.testcaseDurationName,
-                stringValue: numFormatter.unwrappedString(for: time)
-            )
+        } else {
+            if let time = duration, !nodeNames.testcaseDurationName.isEmpty {
+                testcase.addAttribute(
+                    name: nodeNames.testcaseDurationName,
+                    stringValue: numFormatter.unwrappedString(for: time)
+                )
+            }
+            // A test that never ran (`.disabled`) has no duration but still belongs to its class.
             if !nodeNames.testcaseClassNameName.isEmpty {
                 testcase.addAttribute(name: nodeNames.testcaseClassNameName, stringValue: classname)
             }
@@ -447,6 +467,14 @@ private extension JunitTestGroup {
 
     var nameString: String {
         return name ?? "No-name"
+    }
+
+    /// A bundle's own tests (top-level `@Test` functions) take the module name as classname.
+    var testcaseClassname: String {
+        guard nameString.hasSuffix(".xctest") else {
+            return nameString
+        }
+        return String(nameString.dropLast(".xctest".count))
     }
 
     func testSuiteXML(numFormatter: NumberFormatter) -> XMLElement {
@@ -599,7 +627,12 @@ private extension JunitFailureSummary {
             let textNode = XMLNode(kind: .text)
             textNode.objectValue = value
             failure.addChild(textNode)
-            let shortMessage = if let producingTarget {
+            // Azure DevOps shows this attribute as the error message: the failure's
+            // first line says more there than the test name it already lists.
+            let firstLine = message.split(whereSeparator: \.isNewline).first.map(String.init)
+            let shortMessage = if let firstLine, !firstLine.isEmpty {
+                firstLine
+            } else if let producingTarget {
                 "\(issueType) in \(producingTarget): \(testCaseName)"
             } else {
                 "\(issueType): \(testCaseName)"

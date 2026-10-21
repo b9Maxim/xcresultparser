@@ -719,7 +719,7 @@ public struct XCResultFormatter {
 
         if node.nodeType == .failureMessage,
            let currentIdentifier,
-           let detail = FailureMessageDetail(from: node.name) {
+           let detail = FailureMessageDetail(failureMessage: node) {
             result[currentIdentifier, default: []].append(detail)
             let dotKey = currentIdentifier.replacingOccurrences(of: "/", with: ".")
             result[dotKey, default: []].append(detail)

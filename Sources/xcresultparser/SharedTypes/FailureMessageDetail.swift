@@ -28,4 +28,17 @@ extension FailureMessageDetail {
         message = msg
         documentLocation = "\(file):\(line)"
     }
+
+    /// Xcode 26+ keeps the location out of the message, in `sourceLocation`.
+    init?(failureMessage node: XCTestNode) {
+        if let parsed = FailureMessageDetail(from: node.name) {
+            self = parsed
+            return
+        }
+        guard let location = node.sourceLocation, !node.name.isEmpty else {
+            return nil
+        }
+        message = node.name
+        documentLocation = "\(URL(fileURLWithPath: location.filePath).lastPathComponent):\(location.lineNumber)"
+    }
 }
